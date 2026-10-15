@@ -25,7 +25,7 @@ and lets you **chat with the video** through a LangGraph agent — with OCR on t
 
 <div align="center">
 
-<a href="https://youtu.be/ph5zByav8CA">
+<a href="https://youtu.be/jjA3cKPn2nw">
   <img src="architecture/thumbnail.png" alt="ClipChat demo video — click to watch on YouTube" width="85%">
 </a>
 
