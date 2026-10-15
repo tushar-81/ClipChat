@@ -9,6 +9,7 @@ import logging
 import shutil
 import uuid
 import whisper
+from chromadb.utils import embedding_functions
 import json
 import os
 
@@ -41,6 +42,13 @@ app.mount("/videos", StaticFiles(directory=UPLOAD_DIR), name="videos")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 model = whisper.load_model(os.getenv('WHISPER_MODEL', 'base'), device=device)
+
+# Load Chroma's embedding model at startup too, so its one-time ~80 MB download
+# happens here instead of stalling the first /upload request
+try:
+    embedding_functions.DefaultEmbeddingFunction()(["warmup"])
+except Exception:
+    logging.exception("Could not load the Chroma embedding model; it will be retried on first upload")
 
 
 
@@ -200,7 +208,13 @@ async def query(websocket: WebSocket,job_id:str):
         config = {
             'configurable': {
             "thread_id": job_id}}
-        
+
+        # Resume the conversation saved in Redis for this job, so a page reload
+        # doesn't overwrite it with the empty history above
+        saved = workflow.get_state(config).values
+        new_state['chat_history'] = saved.get('chat_history') or []
+        new_state['knowledge_history'] = saved.get('knowledge_history') or []
+
         while True:
             data = await websocket.receive_text()
             new_state['user_message']=data
