@@ -1,6 +1,8 @@
 <div align="center">
 
-# 🎬 AskTube
+<img src="static/favicon.svg" alt="ClipChat logo" width="120" height="120">
+
+# ClipChat
 
 ### Chat with any YouTube video using AI
 
@@ -11,9 +13,8 @@
 [![ChromaDB](https://img.shields.io/badge/ChromaDB-Vector%20Store-orange?style=flat-square)](https://www.trychroma.com)
 [![Redis](https://img.shields.io/badge/Redis-Checkpointer-DC382D?style=flat-square&logo=redis&logoColor=white)](https://redis.io)
 [![Whisper](https://img.shields.io/badge/OpenAI-Whisper-412991?style=flat-square&logo=openai&logoColor=white)](https://github.com/openai/whisper)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE)
 
-Paste a YouTube link → AskTube downloads it, transcribes it with Whisper, indexes it in ChromaDB,<br>
+Paste a YouTube link → ClipChat downloads it, transcribes it with Whisper, indexes it in ChromaDB,<br>
 and lets you **chat with the video** through a LangGraph agent — with OCR on the frames it cites.
 
 </div>
@@ -24,12 +25,11 @@ and lets you **chat with the video** through a LangGraph agent — with OCR on t
 
 <div align="center">
 
-<!-- TODO: replace YOUTUBE_VIDEO_ID with the ID of the demo video (the part after watch?v=) -->
 <a href="https://youtu.be/ZFn1x7jbxeI">
-  <img src="architecture/thumbnail.png" alt="AskTube demo video — click to watch on YouTube" width="85%">
+  <img src="architecture/thumbnail.png" alt="ClipChat demo video — click to watch on YouTube" width="85%">
 </a>
 
-**[▶ Watch the demo on YouTube](https://youtu.be/ZFn1x7jbxeI)**
+**[▶ Watch the demo on YouTube](https://youtu.be/jjA3cKPn2nw)**
 
 </div>
 
@@ -47,7 +47,6 @@ and lets you **chat with the video** through a LangGraph agent — with OCR on t
 - [API Reference](#-api-reference)
 - [Project Structure](#%EF%B8%8F-project-structure)
 - [Troubleshooting](#%EF%B8%8F-troubleshooting)
-- [License](#-license)
 
 ---
 
@@ -131,7 +130,7 @@ All routes end at the `LLM Call` node (`gpt-4o-mini`). Graph state is checkpoint
 
 ## 🚀 Getting Started (Docker)
 
-AskTube runs as **two containers**: the official Redis image and the AskTube app.
+ClipChat runs as **two containers**: the official Redis image and the ClipChat app.
 
 ### Prerequisites
 
@@ -142,8 +141,8 @@ AskTube runs as **two containers**: the official Redis image and the AskTube app
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/tushar-81/AskTube.git
-cd AskTube
+git clone https://github.com/tushar-81/ClipChat.git
+cd ClipChat
 ```
 
 ### 2. Create a `.env` file
@@ -161,7 +160,7 @@ docker run -d --name redis-cache -p 6379:6379 redis
 > Redis 8+ is required — the LangGraph checkpointer uses the built-in JSON and Search modules.
 > Already created it before? Just run `docker start redis-cache`.
 
-### 4. Build and start AskTube
+### 4. Build and start ClipChat
 
 ```bash
 docker compose up --build -d
@@ -175,7 +174,7 @@ The first build downloads PyTorch with CUDA (~3 GB), so it takes a while. The fi
 http://localhost:8000
 ```
 
-Check both containers are up with `docker ps` — you should see `redis-cache` and `asktube-app`.
+Check both containers are up with `docker ps` — you should see `redis-cache` and `clipchat-app`.
 
 <details>
 <summary><b>Running without a GPU</b></summary>
@@ -188,15 +187,15 @@ Remove the `deploy:` block from `docker-compose.yml`, then run `docker compose u
 <summary><b>Running without Docker Compose</b></summary>
 
 ```bash
-docker build -t asktube .
+docker build -t clipchat .
 
-docker run -d --name asktube-app --gpus all -p 8000:8000 \
+docker run -d --name clipchat-app --gpus all -p 8000:8000 \
   --env-file .env \
   -e REDIS_HOST=host.docker.internal \
   --add-host host.docker.internal:host-gateway \
   -v "$(pwd)/upload_videos:/app/upload_videos" \
-  -v asktube-models:/root/.cache \
-  asktube
+  -v clipchat-models:/root/.cache \
+  clipchat
 ```
 
 Leave out `--gpus all` to run on CPU.
@@ -237,7 +236,7 @@ docker run -d --name redis-cache -p 6379:6379 redis
 uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-> **Windows:** if ffmpeg or Tesseract aren't on `PATH`, AskTube looks in `C:/ffmpeg/bin` and `C:\Program Files\Tesseract-OCR\tesseract.exe`. Override with `FFMPEG_LOCATION` / `TESSERACT_CMD`.
+> **Windows:** if ffmpeg or Tesseract aren't on `PATH`, ClipChat looks in `C:/ffmpeg/bin` and `C:\Program Files\Tesseract-OCR\tesseract.exe`. Override with `FFMPEG_LOCATION` / `TESSERACT_CMD`.
 
 ---
 
@@ -278,13 +277,13 @@ Interactive docs are available at `http://localhost:8000/docs`.
 ## 🗂️ Project Structure
 
 ```
-AskTube/
+ClipChat/
 ├── graph/
 │   ├── graph_nodes.py      # LangGraph nodes, router & Redis checkpointer
 │   ├── LLM_call.py         # OpenAI chat / JSON-mode calls
 │   └── state.py            # AgentState TypedDict
 ├── architecture/           # README images
-├── static/                 # Static assets served at /static
+├── static/                 # Static assets served at /static (favicon.svg = app logo)
 ├── upload_videos/          # Per-job runtime data (gitignored)
 │
 ├── main.py                 # FastAPI app — routes & WebSocket endpoint
@@ -325,7 +324,7 @@ AskTube/
 Whisper is running on CPU. Check the GPU is visible inside the container:
 
 ```bash
-docker exec asktube-app python -c "import torch; print(torch.cuda.is_available())"
+docker exec clipchat-app python -c "import torch; print(torch.cuda.is_available())"
 ```
 
 </details>
@@ -343,12 +342,6 @@ Use a smaller model: set `WHISPER_MODEL=tiny` or `base`.
 Delete stale job folders in `upload_videos/` from previous runs and restart.
 
 </details>
-
----
-
-## 📄 License
-
-MIT License — see [LICENSE](LICENSE) for details.
 
 ---
 
