@@ -1,8 +1,8 @@
 services:
   app:
     build: .
-    image: asktube
-    container_name: asktube-app
+    image: clipchat
+    container_name: clipchat-app
     ports:
       - "8000:8000"
     env_file: .env
