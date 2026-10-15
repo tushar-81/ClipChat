@@ -1,944 +1,1515 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AskTube — Chat with any YouTube video</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&family=JetBrains+Mono:wght@300;400&display=swap" rel="stylesheet">
-<style>
-  :root {
-    --bg: #0a0a0b;
-    --surface: #111114;
-    --surface2: #18181d;
-    --border: rgba(255,255,255,0.07);
-    --border-active: rgba(255,180,0,0.4);
-    --amber: #f5a623;
-    --amber-dim: rgba(245,166,35,0.12);
-    --amber-glow: rgba(245,166,35,0.06);
-    --text: #e8e6e0;
-    --text-muted: #6b6a66;
-    --text-dim: #9b9890;
-    --red: #e05454;
-    --green: #4caf7d;
-    --radius: 6px;
-    --radius-lg: 12px;
-  }
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ClipChat</title>
+  <meta name="description" content="Ask questions about a YouTube video. Transcribed with Whisper, indexed in ChromaDB, answered by a LangGraph agent.">
+  <meta name="theme-color" content="#0B0D10">
+  <meta name="color-scheme" content="dark">
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap">
 
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  <!-- No build step: Tailwind compiles classes in the browser, Babel compiles the JSX below -->
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            paper: '#0B0D10',
+            surface: '#13161B',
+            ink: '#E6E8EB',
+            mute: '#8B93A1',
+            line: '#252A31',
+            well: '#050607',   // video and status panels
+            accent: '#F43F5E',
+            ok: '#22C55E',
+          },
+          fontFamily: {
+            display: ['"Bricolage Grotesque"', 'system-ui', 'sans-serif'],
+            sans: ['Geist', 'system-ui', '-apple-system', '"Segoe UI"', 'sans-serif'],
+            mono: ['"Geist Mono"', 'ui-monospace', 'SFMono-Regular', 'Consolas', 'monospace'],
+          },
+          keyframes: {
+            blink: { '0%, 100%': { opacity: '1' }, '50%': { opacity: '0.2' } },
+            scan: { '0%': { transform: 'translateX(-100%)' }, '100%': { transform: 'translateX(300%)' } },
+            caret: { '0%, 49%': { opacity: '1' }, '50%, 100%': { opacity: '0' } },
+          },
+          animation: {
+            blink: 'blink 1.1s ease-in-out infinite',
+            scan: 'scan 1.3s cubic-bezier(0.4, 0, 0.2, 1) infinite',
+            caret: 'caret 1s step-end infinite',
+          },
+        },
+      },
+    };
+  </script>
+  <style type="text/tailwindcss">
+    @layer base {
+      html { @apply bg-paper; color-scheme: dark; -webkit-text-size-adjust: 100%; }
+      body { @apply bg-paper font-sans text-ink antialiased; }
+      ::selection { background: rgb(244 63 94 / 0.32); }
+      :focus-visible { outline: 2px solid theme('colors.accent'); outline-offset: -2px; }
+      * { scrollbar-width: thin; scrollbar-color: theme('colors.line') transparent; }
+      input[type='search']::-webkit-search-cancel-button { -webkit-appearance: none; }
+    }
+  </style>
 
-  html, body {
-    height: 100%;
-    background: var(--bg);
-    color: var(--text);
-    font-family: 'DM Sans', sans-serif;
-    font-size: 15px;
-    overflow: hidden;
-  }
-
-  /* Subtle noise texture */
-  body::before {
-    content: '';
-    position: fixed; inset: 0; z-index: 0;
-    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E");
-    pointer-events: none;
-    opacity: 0.4;
-  }
-
-  /* Ambient top glow */
-  body::after {
-    content: '';
-    position: fixed; top: -200px; left: 50%; transform: translateX(-50%);
-    width: 800px; height: 400px;
-    background: radial-gradient(ellipse, rgba(245,166,35,0.06) 0%, transparent 70%);
-    pointer-events: none; z-index: 0;
-  }
-
-  .app {
-    position: relative; z-index: 1;
-    display: grid;
-    grid-template-rows: auto 1fr;
-    height: 100vh;
-    max-width: 1600px;
-    margin: 0 auto;
-    padding: 0 24px;
-  }
-
-  /* ── HEADER ── */
-  header {
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 20px 0 16px;
-    border-bottom: 1px solid var(--border);
-  }
-
-  .logo {
-    display: flex; align-items: baseline; gap: 2px;
-    font-family: 'Bebas Neue', sans-serif;
-    font-size: 28px;
-    letter-spacing: 2px;
-    line-height: 1;
-  }
-  .logo-ask { color: var(--text-muted); }
-  .logo-tube { color: var(--amber); }
-
-  .header-meta {
-    display: flex; align-items: center; gap: 20px;
-  }
-
-  .status-pill {
-    display: flex; align-items: center; gap: 7px;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 11px;
-    color: var(--text-muted);
-    letter-spacing: 0.5px;
-    text-transform: uppercase;
-  }
-  .status-dot {
-    width: 7px; height: 7px;
-    border-radius: 50%;
-    background: var(--text-muted);
-    transition: background 0.4s, box-shadow 0.4s;
-  }
-  .status-dot.ready { background: var(--green); box-shadow: 0 0 8px var(--green); }
-  .status-dot.processing {
-    background: var(--amber);
-    animation: pulse-dot 1.2s ease-in-out infinite;
-  }
-  .status-dot.error { background: var(--red); }
-
-  @keyframes pulse-dot {
-    0%, 100% { opacity: 1; box-shadow: 0 0 4px var(--amber); }
-    50% { opacity: 0.4; box-shadow: 0 0 12px var(--amber); }
-  }
-
-  /* ── MAIN LAYOUT ── */
-  .main {
-    display: grid;
-    grid-template-columns: 1fr 420px;
-    gap: 20px;
-    padding: 20px 0;
-    overflow: hidden;
-    min-height: 0;
-  }
-
-  /* ── LEFT PANEL ── */
-  .left-panel {
-    display: flex; flex-direction: column; gap: 16px;
-    overflow: hidden; min-height: 0;
-  }
-
-  /* URL Input Area */
-  .url-section {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    padding: 20px;
-    transition: border-color 0.3s;
-  }
-  .url-section:focus-within { border-color: var(--border-active); }
-
-  .section-label {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 10px;
-    letter-spacing: 1.5px;
-    text-transform: uppercase;
-    color: var(--text-muted);
-    margin-bottom: 12px;
-  }
-
-  .url-input-row {
-    display: flex; gap: 10px;
-  }
-
-  .url-input {
-    flex: 1;
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 10px 14px;
-    color: var(--text);
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 13px;
-    outline: none;
-    transition: border-color 0.2s, background 0.2s;
-  }
-  .url-input::placeholder { color: var(--text-muted); }
-  .url-input:focus {
-    border-color: var(--amber);
-    background: rgba(245,166,35,0.04);
-  }
-
-  .btn-submit {
-    background: var(--amber);
-    color: #0a0a0b;
-    border: none; border-radius: var(--radius);
-    padding: 10px 22px;
-    font-family: 'DM Sans', sans-serif;
-    font-size: 14px;
-    font-weight: 500;
-    cursor: pointer;
-    white-space: nowrap;
-    transition: opacity 0.2s, transform 0.1s;
-    position: relative; overflow: hidden;
-  }
-  .btn-submit:hover { opacity: 0.9; }
-  .btn-submit:active { transform: scale(0.97); }
-  .btn-submit:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
-
-  .btn-submit .btn-text { transition: opacity 0.2s; }
-  .btn-submit.loading .btn-text { opacity: 0; }
-  .btn-submit .spinner {
-    position: absolute; inset: 0;
-    display: flex; align-items: center; justify-content: center;
-    opacity: 0; transition: opacity 0.2s;
-  }
-  .btn-submit.loading .spinner { opacity: 1; }
-  .spinner-ring {
-    width: 16px; height: 16px;
-    border: 2px solid rgba(0,0,0,0.3);
-    border-top-color: #0a0a0b;
-    border-radius: 50%;
-    animation: spin 0.7s linear infinite;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
-
-  /* Progress bar */
-  .progress-bar-wrap {
-    margin-top: 12px;
-    height: 2px;
-    background: var(--surface2);
-    border-radius: 2px;
-    overflow: hidden;
-    opacity: 0;
-    transition: opacity 0.3s;
-  }
-  .progress-bar-wrap.visible { opacity: 1; }
-  .progress-bar {
-    height: 100%; width: 0%;
-    background: linear-gradient(90deg, var(--amber), #ffdc6e);
-    border-radius: 2px;
-    transition: width 0.4s ease;
-  }
-  .progress-bar.indeterminate {
-    width: 40%;
-    animation: slide-progress 1.5s ease-in-out infinite;
-  }
-  @keyframes slide-progress {
-    0% { transform: translateX(-150%); }
-    100% { transform: translateX(350%); }
-  }
-
-  /* Video Player */
-  .video-section {
-    flex: 1;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    overflow: hidden;
-    display: flex; flex-direction: column;
-    min-height: 0;
-    position: relative;
-  }
-
-  .video-placeholder {
-    flex: 1;
-    display: flex; flex-direction: column;
-    align-items: center; justify-content: center; gap: 14px;
-    color: var(--text-muted);
-    padding: 40px;
-    text-align: center;
-  }
-
-  .video-placeholder-icon {
-    width: 56px; height: 56px;
-    border: 2px solid var(--border);
-    border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    position: relative;
-  }
-  .video-placeholder-icon::before {
-    content: '';
-    width: 0; height: 0;
-    border-style: solid;
-    border-width: 10px 0 10px 18px;
-    border-color: transparent transparent transparent var(--border);
-    margin-left: 4px;
-  }
-
-  .video-placeholder p {
-    font-size: 13px;
-    line-height: 1.6;
-    max-width: 260px;
-  }
-  .video-placeholder span {
-    display: block;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 10px;
-    letter-spacing: 1px;
-    text-transform: uppercase;
-    color: var(--text-muted);
-    opacity: 0.5;
-  }
-
-  .video-container {
-    flex: 1;
-    display: none;
-    flex-direction: column;
-    min-height: 0;
-  }
-  .video-container.active { display: flex; }
-
-  video {
-    width: 100%; flex: 1;
-    object-fit: contain;
-    background: #000;
-    min-height: 0;
-  }
-
-  .video-info-bar {
-    padding: 12px 16px;
-    border-top: 1px solid var(--border);
-    display: flex; align-items: center; gap: 12px;
-  }
-
-  .video-info-bar .job-id {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 11px;
-    color: var(--text-muted);
-    letter-spacing: 0.5px;
-  }
-
-  .tag {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 10px;
-    letter-spacing: 0.5px;
-    text-transform: uppercase;
-    padding: 3px 8px;
-    border-radius: 3px;
-    border: 1px solid;
-  }
-  .tag-processing { border-color: rgba(245,166,35,0.3); color: var(--amber); background: var(--amber-dim); }
-  .tag-ready { border-color: rgba(76,175,125,0.3); color: var(--green); background: rgba(76,175,125,0.1); }
-
-  .btn-transcribe {
-    margin-left: auto;
-    background: transparent;
-    border: 1px solid var(--amber);
-    color: var(--amber);
-    border-radius: var(--radius);
-    padding: 6px 14px;
-    font-size: 13px;
-    font-family: 'DM Sans', sans-serif;
-    cursor: pointer;
-    transition: background 0.2s, color 0.2s;
-  }
-  .btn-transcribe:hover { background: var(--amber-dim); }
-  .btn-transcribe:disabled { opacity: 0.35; cursor: not-allowed; }
-
-  /* ── RIGHT PANEL — CHAT ── */
-  .chat-panel {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    display: flex; flex-direction: column;
-    overflow: hidden; min-height: 0;
-    position: relative;
-  }
-
-  .chat-header {
-    padding: 16px 20px 14px;
-    border-bottom: 1px solid var(--border);
-    display: flex; align-items: center; justify-content: space-between;
-    flex-shrink: 0;
-  }
-
-  .chat-title {
-    font-family: 'Bebas Neue', sans-serif;
-    font-size: 18px;
-    letter-spacing: 1.5px;
-    color: var(--text);
-  }
-
-  .chat-locked-overlay {
-    position: absolute; inset: 0; z-index: 10;
-    background: rgba(10,10,11,0.85);
-    backdrop-filter: blur(4px);
-    display: flex; flex-direction: column;
-    align-items: center; justify-content: center; gap: 12px;
-    transition: opacity 0.4s;
-  }
-  .chat-locked-overlay.hidden { opacity: 0; pointer-events: none; }
-
-  .lock-icon {
-    width: 40px; height: 40px;
-    border: 1.5px solid var(--border);
-    border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 16px;
-  }
-
-  .chat-locked-overlay p {
-    font-size: 13px;
-    color: var(--text-muted);
-    text-align: center;
-    max-width: 220px;
-    line-height: 1.6;
-  }
-
-  /* Messages */
-  .messages {
-    flex: 1; overflow-y: auto;
-    padding: 20px;
-    display: flex; flex-direction: column; gap: 16px;
-    scroll-behavior: smooth;
-    min-height: 0;
-  }
-  .messages::-webkit-scrollbar { width: 4px; }
-  .messages::-webkit-scrollbar-track { background: transparent; }
-  .messages::-webkit-scrollbar-thumb { background: var(--surface2); border-radius: 2px; }
-
-  .message {
-    display: flex; flex-direction: column; gap: 4px;
-    animation: msg-in 0.25s ease both;
-  }
-  @keyframes msg-in {
-    from { opacity: 0; transform: translateY(8px); }
-    to { opacity: 1; transform: translateY(0); }
-  }
-
-  .message.user { align-items: flex-end; }
-  .message.assistant { align-items: flex-start; }
-
-  .msg-label {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 10px;
-    letter-spacing: 1px;
-    text-transform: uppercase;
-    color: var(--text-muted);
-    padding: 0 4px;
-  }
-
-  .msg-bubble {
-    max-width: 88%;
-    padding: 10px 14px;
-    border-radius: var(--radius);
-    line-height: 1.65;
-    font-size: 14px;
-  }
-
-  .message.user .msg-bubble {
-    background: var(--amber-dim);
-    border: 1px solid rgba(245,166,35,0.2);
-    color: var(--text);
-    border-bottom-right-radius: 2px;
-  }
-
-  .message.assistant .msg-bubble {
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    color: var(--text);
-    border-bottom-left-radius: 2px;
-  }
-
-  /* Typing indicator */
-  .typing-indicator {
-    display: flex; align-items: center; gap: 5px;
-    padding: 10px 14px;
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    border-bottom-left-radius: 2px;
-    width: fit-content;
-  }
-  .typing-dot {
-    width: 5px; height: 5px;
-    background: var(--text-muted);
-    border-radius: 50%;
-    animation: typing 1.2s ease-in-out infinite;
-  }
-  .typing-dot:nth-child(2) { animation-delay: 0.2s; }
-  .typing-dot:nth-child(3) { animation-delay: 0.4s; }
-  @keyframes typing {
-    0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
-    30% { transform: translateY(-4px); opacity: 1; }
-  }
-
-  .chat-empty {
-    flex: 1; display: flex;
-    flex-direction: column; align-items: center; justify-content: center;
-    gap: 8px; text-align: center; color: var(--text-muted);
-    padding: 20px;
-  }
-  .chat-empty-title {
-    font-family: 'Bebas Neue', sans-serif;
-    font-size: 20px;
-    letter-spacing: 1px;
-    color: var(--text-dim);
-  }
-  .chat-empty p {
-    font-size: 13px; line-height: 1.6;
-    max-width: 240px;
-  }
-
-  .suggestions {
-    display: flex; flex-direction: column; gap: 8px;
-    margin-top: 16px; width: 100%;
-  }
-  .suggestion-btn {
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 9px 14px;
-    color: var(--text-dim);
-    font-size: 13px;
-    text-align: left;
-    cursor: pointer;
-    transition: border-color 0.2s, background 0.2s, color 0.2s;
-    font-family: 'DM Sans', sans-serif;
-  }
-  .suggestion-btn:hover {
-    border-color: var(--border-active);
-    background: var(--amber-glow);
-    color: var(--text);
-  }
-
-  /* Chat input */
-  .chat-input-area {
-    padding: 16px;
-    border-top: 1px solid var(--border);
-    flex-shrink: 0;
-  }
-
-  .chat-input-row {
-    display: flex; gap: 10px; align-items: flex-end;
-  }
-
-  .chat-textarea {
-    flex: 1;
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 10px 14px;
-    color: var(--text);
-    font-family: 'DM Sans', sans-serif;
-    font-size: 14px;
-    outline: none;
-    resize: none;
-    line-height: 1.5;
-    max-height: 120px;
-    overflow-y: auto;
-    transition: border-color 0.2s;
-  }
-  .chat-textarea::placeholder { color: var(--text-muted); }
-  .chat-textarea:focus { border-color: var(--border-active); }
-  .chat-textarea::-webkit-scrollbar { width: 3px; }
-  .chat-textarea::-webkit-scrollbar-thumb { background: var(--border); }
-
-  .btn-send {
-    background: var(--amber);
-    color: #0a0a0b;
-    border: none; border-radius: var(--radius);
-    width: 38px; height: 38px;
-    cursor: pointer;
-    display: flex; align-items: center; justify-content: center;
-    flex-shrink: 0;
-    transition: opacity 0.2s, transform 0.1s;
-  }
-  .btn-send:hover { opacity: 0.85; }
-  .btn-send:active { transform: scale(0.93); }
-  .btn-send:disabled { opacity: 0.35; cursor: not-allowed; transform: none; }
-  .btn-send svg { width: 16px; height: 16px; }
-
-  .input-hint {
-    margin-top: 8px;
-    font-size: 11px;
-    color: var(--text-muted);
-    font-family: 'JetBrains Mono', monospace;
-    letter-spacing: 0.3px;
-  }
-
-  /* Toast */
-  .toast {
-    position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%) translateY(20px);
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 10px 18px;
-    font-size: 13px; color: var(--text);
-    z-index: 1000;
-    opacity: 0;
-    transition: opacity 0.3s, transform 0.3s;
-    pointer-events: none;
-  }
-  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
-  .toast.error { border-color: rgba(224,84,84,0.4); color: var(--red); }
-  .toast.success { border-color: rgba(76,175,125,0.4); color: var(--green); }
-
-</style>
+  <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone@7.26.4/babel.min.js" crossorigin></script>
 </head>
 <body>
+<div id="root"></div>
+<noscript>ClipChat needs JavaScript enabled.</noscript>
 
-<div class="app">
-  <header>
-    <div class="logo">
-      <span class="logo-ask">Ask</span>
-      <span class="logo-tube">Tube</span>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useRef, useCallback, useMemo, memo } = React;
+
+// ─── Config ─────────────────────────────────────────────────────────────────
+
+const STORE_JOBS = 'clipchat.jobs.v1';
+const STORE_ACTIVE = 'clipchat.active.v1';
+const STORE_MSGS = 'clipchat.msgs.v1.';   // + job id
+const POLL_MS = 1500;
+const POLL_LIMIT_MS = 3 * 60 * 1000;
+const MAX_MSGS = 200;
+const MAX_RETRIES = 3;
+// main.py sends this exact text when the graph raises; it is shown as an error row
+const SERVER_ERROR_TEXT = 'Sorry, something went wrong while answering. Please try again.';
+const MOD = /Mac|iPhone|iPad/.test(navigator.userAgentData?.platform || navigator.platform || '') ? '⌘' : 'Ctrl';
+
+const PRESETS = [
+  'Summarize the video in five bullet points.',
+  'Which tools, libraries or products are mentioned?',
+  'What is written on screen when the main example is shown?',
+  'List every number, date or figure the speaker cites.',
+];
+
+const STAGE_INFO = {
+  download: { n: '01', label: 'Download', tool: 'yt-dlp → mp4, ≤1080p' },
+  audio: { n: '02', label: 'Audio', tool: 'ffmpeg → wav, 16 kHz mono' },
+  index: { n: '03', label: 'Transcribe', tool: 'whisper → chromadb' },
+  chat: { n: '04', label: 'Chat', tool: 'langgraph · gpt-4o-mini' },
+};
+
+const JOB_STATE = {
+  downloaded: { label: 'downloaded', tone: 'idle' },
+  audio: { label: 'audio ready', tone: 'idle' },
+  indexed: { label: 'indexed', tone: 'ok' },
+  missing: { label: 'missing', tone: 'err' },
+};
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+const store = {
+  get(key, fallback) {
+    try { const raw = localStorage.getItem(key); return raw ? JSON.parse(raw) : fallback; }
+    catch { return fallback; }
+  },
+  set(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch {} },
+  remove(key) { try { localStorage.removeItem(key); } catch {} },
+};
+
+let seq = 0;
+const uid = () => `${Date.now().toString(36)}${(seq++).toString(36)}`;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const pad = (n) => String(Math.floor(n)).padStart(2, '0');
+const shortId = (id) => id.slice(0, 8);
+
+function clock(ts) {
+  const d = new Date(ts);
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+function timecode(sec) {
+  if (!Number.isFinite(sec)) return '--:--';
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  return h ? `${h}:${pad(m)}:${pad(sec % 60)}` : `${pad(m)}:${pad(sec % 60)}`;
+}
+
+function duration(ms) {
+  if (ms == null) return '—';
+  const s = ms / 1000;
+  return s < 60 ? `${s.toFixed(1)} s` : `${Math.floor(s / 60)} m ${pad(s % 60)} s`;
+}
+
+function shortDate(ts) {
+  const d = new Date(ts);
+  return `${d.toLocaleDateString(undefined, { month: 'short', day: '2-digit' })} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function isHttpUrl(raw) {
+  try { return /^https?:$/.test(new URL(raw).protocol); } catch { return false; }
+}
+
+function youtubeId(raw) {
+  try {
+    const u = new URL(raw);
+    const host = u.hostname.replace(/^(www|m)\./, '');
+    if (host === 'youtu.be') return u.pathname.slice(1).split('/')[0] || null;
+    if (host === 'youtube.com' || host === 'music.youtube.com') {
+      if (u.searchParams.get('v')) return u.searchParams.get('v');
+      const m = u.pathname.match(/^\/(shorts|live|embed)\/([\w-]{6,})/);
+      return m ? m[2] : null;
+    }
+  } catch {}
+  return null;
+}
+
+function sourceLabel(url) {
+  const id = youtubeId(url);
+  if (id) return `youtu.be/${id}`;
+  try { const u = new URL(url); return u.hostname.replace(/^www\./, '') + u.pathname.replace(/\/$/, ''); }
+  catch { return url; }
+}
+
+const networkMessage = (e) => (e instanceof TypeError ? 'Server unreachable. Is uvicorn running?' : e.message);
+
+async function errorDetail(res) {
+  try {
+    const body = await res.json();
+    if (body?.detail) return typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail);
+  } catch {}
+  return `HTTP ${res.status}`;
+}
+
+async function fetchStatus(jobId) {
+  const res = await fetch(`/status/${jobId}`, { cache: 'no-store' });
+  return (await res.json()).status;
+}
+
+// Title and channel come from YouTube's oEmbed endpoint, which allows CORS
+async function fetchVideoMeta(url) {
+  if (!youtubeId(url)) return null;
+  try {
+    const res = await fetch(`https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(url)}`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    return { title: data.title || null, channel: data.author_name || null };
+  } catch { return null; }
+}
+
+// main.py writes transcript.jsonl into the job folder, which /videos serves statically
+async function fetchTranscript(jobId) {
+  try {
+    const res = await fetch(`/videos/${jobId}/transcript.jsonl`, { cache: 'no-store' });
+    if (!res.ok) return null;
+    const segments = [];
+    for (const line of (await res.text()).split('\n')) {
+      if (!line.trim()) continue;
+      try {
+        const s = JSON.parse(line);
+        segments.push({ start: Number(s.start), end: Number(s.end), text: String(s.text).trim() });
+      } catch { /* skip a torn line */ }
+    }
+    return segments;
+  } catch { return null; }
+}
+
+// Index of the last segment that starts at or before t
+function findSegment(segments, t) {
+  let lo = 0, hi = segments.length - 1, found = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (segments[mid].start <= t) { found = mid; lo = mid + 1; } else hi = mid - 1;
+  }
+  return found;
+}
+
+function highlight(text, q) {
+  if (!q) return text;
+  const re = new RegExp(`(${q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'ig');
+  return text.split(re).map((part, i) => (i % 2 ? <mark key={i} className="bg-accent/15 text-ink">{part}</mark> : part));
+}
+
+const idleStage = () => ({ state: 'idle', t0: null, ms: null, error: null });
+const doneStage = (ms) => ({ state: 'done', t0: null, ms: ms ?? null, error: null });
+const freshPipeline = () => ({ download: idleStage(), audio: idleStage(), index: idleStage() });
+
+// ─── Minimal markdown (gpt-4o-mini answers use lists, bold and code) ─────────
+
+const FENCE = /^\s*```/;
+const HEADING = /^\s*#{1,6}\s+/;
+const RULE = /^\s*(-{3,}|\*{3,})\s*$/;
+const LIST_UL = /^\s*[-*•]\s+/;
+const LIST_OL = /^\s*(\d+)[.)]\s+/;
+const isBlockStart = (l) => FENCE.test(l) || HEADING.test(l) || RULE.test(l) || LIST_UL.test(l) || LIST_OL.test(l);
+
+function parseBlocks(src) {
+  const lines = src.replace(/\r\n?/g, '\n').split('\n');
+  const blocks = [];
+  let i = 0;
+  const takeList = (re) => {
+    const items = [];
+    while (i < lines.length) {
+      if (re.test(lines[i])) items.push(lines[i++].replace(re, ''));
+      else if (!lines[i].trim() && re.test(lines[i + 1] || '')) i++;
+      else if (/^\s{2,}\S/.test(lines[i]) && !isBlockStart(lines[i])) items[items.length - 1] += ' ' + lines[i++].trim();
+      else break;
+    }
+    return items;
+  };
+  while (i < lines.length) {
+    const line = lines[i];
+    if (!line.trim()) { i++; continue; }
+    if (FENCE.test(line)) {
+      const code = [];
+      i++;
+      while (i < lines.length && !FENCE.test(lines[i])) code.push(lines[i++]);
+      i++;
+      blocks.push({ type: 'code', text: code.join('\n') });
+    } else if (RULE.test(line)) {
+      blocks.push({ type: 'hr' }); i++;
+    } else if (HEADING.test(line)) {
+      blocks.push({ type: 'h', text: line.replace(HEADING, '') }); i++;
+    } else if (LIST_UL.test(line)) {
+      blocks.push({ type: 'ul', items: takeList(LIST_UL) });
+    } else if (LIST_OL.test(line)) {
+      blocks.push({ type: 'ol', start: Number(line.match(LIST_OL)[1]), items: takeList(LIST_OL) });
+    } else {
+      const para = [];
+      while (i < lines.length && lines[i].trim() && !isBlockStart(lines[i])) para.push(lines[i++]);
+      blocks.push({ type: 'p', text: para.join('\n') });
+    }
+  }
+  return blocks;
+}
+
+function inline(text) {
+  return text.split(/(\*\*[^*\n]+\*\*|`[^`\n]+`)/g).map((part, i) => {
+    if (i % 2 === 0) return part;
+    return part[0] === '`'
+      ? <code key={i} className="border border-line bg-paper px-1 py-px font-mono text-[12.5px]">{part.slice(1, -1)}</code>
+      : <strong key={i} className="font-semibold">{part.slice(2, -2)}</strong>;
+  });
+}
+
+const Markdown = memo(function Markdown({ text }) {
+  const blocks = useMemo(() => parseBlocks(text), [text]);
+  return (
+    <div className="space-y-2.5 text-[14px] leading-relaxed text-ink">
+      {blocks.map((b, i) => {
+        switch (b.type) {
+          case 'code':
+            return <pre key={i} className="overflow-x-auto border border-line bg-paper px-3 py-2.5 font-mono text-[12.5px] leading-relaxed"><code>{b.text}</code></pre>;
+          case 'hr':
+            return <hr key={i} className="border-line" />;
+          case 'h':
+            return <p key={i} className="pt-1 font-display text-[15px] font-extrabold tracking-tight">{inline(b.text)}</p>;
+          case 'ul':
+            return <ul key={i} className="list-disc space-y-1 pl-5 marker:text-mute">{b.items.map((t, j) => <li key={j}>{inline(t)}</li>)}</ul>;
+          case 'ol':
+            return <ol key={i} start={b.start} className="list-decimal space-y-1 pl-6 marker:font-mono marker:text-[12px] marker:text-mute">{b.items.map((t, j) => <li key={j}>{inline(t)}</li>)}</ol>;
+          default:
+            return <p key={i} className="whitespace-pre-line break-words">{inline(b.text)}</p>;
+        }
+      })}
     </div>
-    <div class="header-meta">
-      <div class="status-pill">
-        <div class="status-dot" id="statusDot"></div>
-        <span id="statusText">Idle</span>
+  );
+});
+
+// ─── Hooks ──────────────────────────────────────────────────────────────────
+
+function useNow(interval = 100) {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), interval);
+    return () => clearInterval(id);
+  }, [interval]);
+  return now;
+}
+
+// Subscribes to the player directly so playback doesn't re-render the whole app
+function useVideoTime(videoRef, key) {
+  const [time, setTime] = useState(0);
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    const update = () => setTime(v.currentTime);
+    update();
+    v.addEventListener('timeupdate', update);
+    v.addEventListener('seeked', update);
+    return () => {
+      v.removeEventListener('timeupdate', update);
+      v.removeEventListener('seeked', update);
+    };
+  }, [videoRef, key]);
+  return time;
+}
+
+// ─── Primitives ─────────────────────────────────────────────────────────────
+
+function Kbd({ children, dark = false }) {
+  return (
+    <kbd className={`inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-[4px] border px-1 font-mono text-[10.5px] leading-none ${dark ? 'border-paper/30 text-paper/70' :'border-line bg-surface text-mute'}`}>
+      {children}
+    </kbd>
+  );
+}
+
+function Dot({ tone = 'idle', className = '' }) {
+  const look = {
+    idle: 'border border-mute',
+    busy: 'bg-accent animate-blink motion-reduce:animate-none',
+    ok: 'bg-ok',
+    err: 'bg-accent',
+  }[tone];
+  return <span aria-hidden="true" className={`inline-block h-[7px] w-[7px] shrink-0 rounded-full ${look} ${className}`} />;
+}
+
+function Elapsed({ since, className = '' }) {
+  const now = useNow();
+  return <span className={className}>{duration(Math.max(0, now - since))}</span>;
+}
+
+function ScanBar({ dark = false }) {
+  return (
+    <div className={`absolute inset-x-0 top-0 h-0.5 overflow-hidden ${dark ? 'bg-white/10' : ''}`}>
+      <div className="h-full w-1/3 bg-accent animate-scan motion-reduce:animate-none" />
+    </div>
+  );
+}
+
+function CopyText({ value, label, className = '' }) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const t = setTimeout(() => setCopied(false), 1200);
+    return () => clearTimeout(t);
+  }, [copied]);
+  const copy = async (e) => {
+    e.stopPropagation();
+    try { await navigator.clipboard.writeText(value); setCopied(true); }
+    catch { /* clipboard needs a secure context */ }
+  };
+  return (
+    <button type="button" onClick={copy} title={value.length > 48 ? 'Copy text' : `Copy ${value}`} className={`font-mono transition-colors duration-100 ${className}`}>
+      {copied ? 'Copied' : label}
+    </button>
+  );
+}
+
+const Label = ({ children, className = '' }) => (
+  <p className={`font-mono text-[11px] uppercase tracking-[0.14em] text-mute ${className}`}>{children}</p>
+);
+
+// ─── Header ─────────────────────────────────────────────────────────────────
+
+function Logo() {
+  return (
+    <a href="/" className="flex items-center gap-2.5" aria-label="ClipChat home">
+      <svg viewBox="8 8 64 64" className="h-8 w-8 shrink-0" aria-hidden="true">
+        <rect x="8.5" y="8.5" width="63" height="63" rx="15.5" fill="#1A1E25" stroke="#2E343D" />
+        <path d="M22 24 C22 20.7 24.7 18 28 18 H52 C55.3 18 58 20.7 58 24 V46 C58 49.3 55.3 52 52 52 H34 L24 60 V52 C22.9 52 22 51.1 22 50 Z" fill="#E11D48" />
+        <polygon points="33,28 33,42 45,35" fill="#FFFFFF" />
+        <line x1="49" y1="30" x2="49" y2="40" stroke="#FFE4E6" strokeWidth="2.5" strokeLinecap="round" />
+        <line x1="53" y1="33" x2="53" y2="37" stroke="#FB7185" strokeWidth="2.5" strokeLinecap="round" />
+      </svg>
+      <span className="leading-none">
+        <span className="block font-display text-[19px] font-extrabold tracking-tight">Clip<span className="text-accent">Chat</span></span>
+        <span className="mt-1 hidden font-mono text-[9px] font-medium uppercase tracking-[0.18em] text-mute sm:block">Video Q&amp;A engine</span>
+      </span>
+    </a>
+  );
+}
+
+const SOCKET_LOOK = {
+  idle: { tone: 'idle', label: 'socket idle' },
+  connecting: { tone: 'busy', label: 'connecting' },
+  open: { tone: 'ok', label: 'socket open' },
+  closed: { tone: 'err', label: 'socket closed' },
+};
+
+function Header({ job, pendingUrl, fetchFailed, socket, onReconnect, onNewSource }) {
+  const look = SOCKET_LOOK[socket];
+  return (
+    <header className="flex h-14 shrink-0 items-stretch border-b border-line bg-surface">
+      <div className="flex items-center px-4"><Logo /></div>
+      <div className="flex min-w-0 flex-1 items-center gap-3 border-l border-line px-4">
+        {job ? (
+          <>
+            <span className="font-mono text-[11px] uppercase tracking-[0.12em] text-mute">Job</span>
+            <CopyText value={job.id} label={shortId(job.id)} className="text-[12px] tabular-nums text-ink hover:text-accent" />
+            <span className="hidden min-w-0 truncate text-[13px] text-ink md:block">{job.title || sourceLabel(job.url)}</span>
+          </>
+        ) : pendingUrl ? (
+          <span className="min-w-0 truncate font-mono text-[11px] text-mute">
+            <span className={fetchFailed ? 'text-accent' : ''}>{fetchFailed ? 'FETCH FAILED' : 'FETCHING'}</span> · {sourceLabel(pendingUrl)}
+          </span>
+        ) : (
+          <span className="font-mono text-[11px] uppercase tracking-[0.12em] text-mute">No job loaded</span>
+        )}
+      </div>
+      <div className="hidden items-center gap-3 border-l border-line px-4 sm:flex">
+        <span className="flex items-center gap-2 font-mono text-[11px] text-mute"><Dot tone={look.tone} />{look.label}</span>
+        {socket === 'closed' && (
+          <button type="button" onClick={onReconnect} className="font-mono text-[11px] uppercase tracking-[0.12em] text-ink transition-colors duration-100 hover:text-accent">Reconnect</button>
+        )}
+      </div>
+      <button type="button" onClick={onNewSource} className="hidden items-center gap-2.5 border-l border-line px-4 text-[13px] text-mute transition-colors duration-100 hover:bg-paper hover:text-ink md:flex">
+        New source
+        <span className="flex gap-0.5"><Kbd>{MOD}</Kbd><Kbd>K</Kbd></span>
+      </button>
+    </header>
+  );
+}
+
+// ─── Left column ────────────────────────────────────────────────────────────
+
+function SourceBar({ inputRef, value, onChange, busy, error, onSubmit }) {
+  return (
+    <form
+      onSubmit={(e) => { e.preventDefault(); onSubmit(value); }}
+      className="border-b border-line bg-surface transition-colors duration-100 focus-within:border-ink"
+    >
+      <div className="flex items-stretch">
+        <label htmlFor="source" className="hidden items-center border-r border-line px-4 font-mono text-[11px] uppercase tracking-[0.14em] text-mute sm:flex">Source</label>
+        <input
+          id="source"
+          ref={inputRef}
+          type="url"
+          inputMode="url"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          disabled={busy}
+          placeholder="https://www.youtube.com/watch?v=…"
+          autoComplete="off"
+          spellCheck={false}
+          className="min-w-0 flex-1 bg-transparent px-4 py-3.5 font-mono text-[13px] text-ink outline-none placeholder:text-mute disabled:cursor-not-allowed disabled:text-mute"
+        />
+        <button
+          type="submit"
+          disabled={busy || !value.trim()}
+          className="flex items-center gap-2.5 bg-ink px-5 text-[13px] font-medium text-paper transition-colors duration-100 hover:bg-accent hover:text-white disabled:cursor-not-allowed disabled:bg-paper disabled:text-mute"
+        >
+          {busy ? 'Fetching' : 'Fetch'}
+          {!busy && value.trim() && <Kbd dark>↵</Kbd>}
+        </button>
+      </div>
+      {error && <p className="border-t border-line px-4 py-2 font-mono text-[12px] text-accent">{error}</p>}
+    </form>
+  );
+}
+
+function EmptyStage() {
+  return (
+    <div className="grid border-b border-line bg-surface md:grid-cols-[minmax(0,1fr)_248px]">
+      <div className="px-6 py-10 md:px-10 md:py-16">
+        <Label>No video loaded</Label>
+        <h1 className="mt-5 max-w-[13ch] font-display text-[40px] font-extrabold leading-[0.95] tracking-tighter md:text-[58px]">
+          Paste a link. Ask what was said.
+        </h1>
+        <p className="mt-6 max-w-[58ch] text-[15px] leading-relaxed text-mute">
+          ClipChat downloads the video, transcribes the audio with Whisper and indexes every segment in ChromaDB.
+          Questions about the content pull the seven closest segments and OCR the frames behind them, so slides
+          and code on screen are part of the answer.
+        </p>
+        <p className="mt-8 flex items-center gap-2 font-mono text-[11px] text-mute">
+          <span className="flex gap-0.5"><Kbd>{MOD}</Kbd><Kbd>K</Kbd></span> focuses the source field
+        </p>
+      </div>
+      <div className="border-t border-line md:border-l md:border-t-0">
+        <Label className="border-b border-line px-4 py-2.5">Accepted links</Label>
+        <ul className="divide-y divide-line font-mono text-[12px] text-ink">
+          {['youtube.com/watch?v=…', 'youtu.be/…', 'youtube.com/shorts/…', 'youtube.com/live/…'].map((f) => (
+            <li key={f} className="px-4 py-2.5">{f}</li>
+          ))}
+        </ul>
+        <p className="border-t border-line px-4 py-3 text-[12.5px] leading-relaxed text-mute">
+          Private, age-restricted and members-only videos fail at the download step.
+        </p>
       </div>
     </div>
-  </header>
+  );
+}
 
-  <div class="main">
-    <!-- LEFT PANEL -->
-    <div class="left-panel">
-      <!-- URL Input -->
-      <div class="url-section">
-        <div class="section-label">YouTube URL</div>
-        <div class="url-input-row">
-          <input
-            class="url-input"
-            id="urlInput"
-            type="text"
-            placeholder="https://www.youtube.com/watch?v=..."
-            autocomplete="off"
-            spellcheck="false"
-          >
-          <button class="btn-submit" id="submitBtn" onclick="submitURL()">
-            <span class="btn-text">Load Video</span>
-            <span class="spinner"><span class="spinner-ring"></span></span>
-          </button>
+function InkPanel({ kicker, title, busy = false, children }) {
+  return (
+    <div className="relative flex aspect-video max-h-[62vh] min-h-[300px] w-full flex-col justify-end border-b border-line bg-well p-6 text-white md:p-10">
+      {busy && <ScanBar dark />}
+      <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-white/50">{kicker}</p>
+      <h2 className="mt-3 font-display text-3xl font-extrabold tracking-tighter md:text-5xl">{title}</h2>
+      <div className="mt-4 max-w-[62ch] text-[14px] leading-relaxed text-white/70">{children}</div>
+    </div>
+  );
+}
+
+function Stage({ job, pendingUrl, download, videoRef, meta, videoError, onMeta, onVideoError, onRefetch }) {
+  if (job && download.state === 'err') {
+    return (
+      <InkPanel kicker={`Job ${shortId(job.id)} · missing`} title="The files are gone.">
+        <p>The server has no folder for this job in upload_videos/. It was deleted, or the app now runs with a different UPLOAD_DIR.</p>
+        <button type="button" onClick={() => onRefetch(job.url)} className="mt-5 border border-white/30 px-3.5 py-1.5 text-[12.5px] font-medium text-white transition-colors duration-100 hover:border-accent hover:bg-accent">
+          Fetch {sourceLabel(job.url)} again
+        </button>
+      </InkPanel>
+    );
+  }
+
+  if (job) {
+    return (
+      <div className="border-b border-line">
+        <div className="relative bg-well">
+          <video
+            key={job.id}
+            ref={videoRef}
+            src={`/videos/${job.id}/video.mp4`}
+            controls
+            playsInline
+            preload="metadata"
+            onLoadedMetadata={(e) => onMeta({ duration: e.currentTarget.duration, w: e.currentTarget.videoWidth, h: e.currentTarget.videoHeight })}
+            onError={onVideoError}
+            className="block aspect-video max-h-[62vh] w-full object-contain"
+          />
+          {videoError && (
+            <div className="absolute inset-0 flex flex-col justify-end p-6 text-white md:p-10">
+              <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-white/50">video.mp4</p>
+              <p className="mt-2 max-w-[52ch] text-[14px] leading-relaxed text-white/80">
+                The browser couldn't play this file. The download may be incomplete, or the codec isn't supported here. Chat still works once the transcript is indexed.
+              </p>
+            </div>
+          )}
         </div>
-        <div class="progress-bar-wrap" id="progressWrap">
-          <div class="progress-bar indeterminate" id="progressBar"></div>
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-1 bg-surface px-4 py-2 font-mono text-[11px] tabular-nums text-mute">
+          <span><span className="text-mute">RES </span><span className="text-ink">{meta ? `${meta.w}×${meta.h}` : '—'}</span></span>
+          <span><span className="text-mute">LEN </span><span className="text-ink">{meta ? timecode(meta.duration) : '—'}</span></span>
+          <span className="min-w-0 truncate">{sourceLabel(job.url)}</span>
+          <a href={job.url} target="_blank" rel="noreferrer noopener" className="ml-auto transition-colors duration-100 hover:text-ink">Open source ↗</a>
         </div>
       </div>
+    );
+  }
 
-      <!-- Video Player -->
-      <div class="video-section">
-        <div class="video-placeholder" id="videoPlaceholder">
-          <div class="video-placeholder-icon"></div>
-          <p>Paste a YouTube URL above and click <strong style="color:var(--amber)">Load Video</strong> to get started</p>
-          <span>Supports any public YouTube video</span>
+  if (pendingUrl && download.state === 'run') {
+    return (
+      <InkPanel busy kicker={<>01 · yt-dlp · <Elapsed since={download.t0} className="tabular-nums" /></>} title="Downloading">
+        <p className="truncate font-mono text-[12px] text-white">{pendingUrl}</p>
+        <p className="mt-2">The request stays open until yt-dlp has merged the video and audio streams into one mp4. Long videos take a few minutes.</p>
+      </InkPanel>
+    );
+  }
+
+  if (pendingUrl && download.state === 'err') {
+    return (
+      <InkPanel kicker="01 · yt-dlp · failed" title="Download failed.">
+        <p className="border-l-2 border-accent pl-3 font-mono text-[12px] text-white">{download.error}</p>
+        <ul className="mt-4 space-y-1">
+          <li>– The video has to be public, and not age-restricted or members-only.</li>
+          <li>– Extraction errors usually mean yt-dlp is out of date. Bump it in requirements.txt and rebuild.</li>
+        </ul>
+      </InkPanel>
+    );
+  }
+
+  return <EmptyStage />;
+}
+
+const CELL_BAR = {
+  done: <div className="absolute inset-x-0 top-0 h-0.5 bg-ink" />,
+  err: <div className="absolute inset-x-0 top-0 h-0.5 bg-accent" />,
+  run: <ScanBar />,
+  idle: null,
+};
+
+function Cell({ info, bar, tone, value, word, error, children }) {
+  return (
+    <div className="relative bg-surface px-4 pb-3.5 pt-4">
+      {CELL_BAR[bar]}
+      <div className="flex items-center justify-between gap-2">
+        <span className="min-w-0 truncate font-mono text-[11px] uppercase tracking-[0.12em]">
+          <span className="text-mute">{info.n}</span> <span className="text-ink">{info.label}</span>
+        </span>
+        <Dot tone={tone} />
+      </div>
+      <p className="mt-1 truncate font-mono text-[11px] text-mute">{info.tool}</p>
+      <div className="mt-3 flex items-baseline justify-between gap-2">
+        <span className="font-mono text-xl tabular-nums tracking-tight text-ink">{value}</span>
+        <span className="font-mono text-[11px] text-mute">{word}</span>
+      </div>
+      {error && <p className="mt-2 text-[12px] leading-snug text-accent">{error}</p>}
+      {children}
+    </div>
+  );
+}
+
+const STAGE_TONE = { idle: 'idle', run: 'busy', done: 'ok', err: 'err' };
+const STAGE_WORD = { idle: 'waiting', run: 'running', done: 'done', err: 'failed' };
+
+function StageCell({ info, stage, children }) {
+  const value = stage.state === 'run' ? <Elapsed since={stage.t0} /> : duration(stage.ms);
+  return (
+    <Cell info={info} bar={stage.state} tone={STAGE_TONE[stage.state]} value={value} word={STAGE_WORD[stage.state]} error={stage.error}>
+      {children}
+    </Cell>
+  );
+}
+
+function CellButton({ children, onClick }) {
+  return (
+    <button type="button" onClick={onClick} className="mt-3 w-full border border-ink bg-ink px-3 py-1.5 text-[12.5px] font-medium text-paper hover:text-white transition-colors duration-100 hover:border-accent hover:bg-accent">
+      {children}
+    </button>
+  );
+}
+
+function Pipeline({ pipeline, job, socket, stats, onIndex }) {
+  const { download, audio, index } = pipeline;
+  const canIndex = job && audio.state === 'done' && (index.state === 'idle' || index.state === 'err');
+  const socketBar = { idle: 'idle', connecting: 'run', open: 'done', closed: 'err' }[socket];
+  return (
+    <div className="grid grid-cols-2 gap-px border-b border-line bg-line md:grid-cols-4">
+      <StageCell info={STAGE_INFO.download} stage={download} />
+      <StageCell info={STAGE_INFO.audio} stage={audio} />
+      <StageCell info={STAGE_INFO.index} stage={index}>
+        {canIndex && <CellButton onClick={onIndex}>{index.state === 'err' ? 'Retry transcription' : 'Transcribe + index'}</CellButton>}
+      </StageCell>
+      <Cell
+        info={STAGE_INFO.chat}
+        bar={socketBar}
+        tone={SOCKET_LOOK[socket].tone}
+        value={stats.avg != null ? duration(stats.avg) : '—'}
+        word={stats.asked ? `avg · ${stats.asked} asked` : socket === 'idle' ? 'waiting' : 'no questions'}
+      />
+    </div>
+  );
+}
+
+function JobRow({ job, active, onOpen, onDelete }) {
+  const [confirm, setConfirm] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const state = JOB_STATE[job.stage] || JOB_STATE.downloaded;
+
+  useEffect(() => {
+    if (!confirm) return;
+    const t = setTimeout(() => setConfirm(false), 3000);
+    return () => clearTimeout(t);
+  }, [confirm]);
+
+  const remove = async (e) => {
+    e.stopPropagation();
+    if (!confirm) { setConfirm(true); return; }
+    setBusy(true);
+    const err = await onDelete(job.id);
+    if (err) { setBusy(false); setConfirm(false); setError(err); }
+  };
+
+  return (
+    <tr
+      onClick={() => onOpen(job)}
+      className={`cursor-pointer border-b border-line align-top transition-colors duration-100 ${active ? 'bg-surface shadow-[inset_2px_0_0_#F43F5E]' : 'hover:bg-surface'}`}
+    >
+      <td className="py-2.5 pl-4 pr-3">
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onOpen(job); }}
+          className="font-mono text-[12px] tabular-nums text-ink transition-colors duration-100 hover:text-accent"
+          aria-label={`Open job ${shortId(job.id)}`}
+        >
+          {shortId(job.id)}
+        </button>
+      </td>
+      <td className="w-full max-w-0 px-3 py-2.5">
+        <div className="truncate text-[13px] text-ink">{job.title || sourceLabel(job.url)}</div>
+        {job.title && (
+          <div className="truncate font-mono text-[11px] text-mute">{job.channel ? `${job.channel} · ` : ''}{sourceLabel(job.url)}</div>
+        )}
+        {error && <div className="mt-1 text-[12px] text-accent">{error}</div>}
+      </td>
+      <td className="px-3 py-2.5 text-right font-mono text-[12px] tabular-nums text-mute">{job.durationSec ? timecode(job.durationSec) : '—'}</td>
+      <td className="hidden whitespace-nowrap px-3 py-2.5 font-mono text-[12px] tabular-nums text-mute md:table-cell">{shortDate(job.createdAt)}</td>
+      <td className="whitespace-nowrap px-3 py-2.5">
+        <span className="inline-flex items-center gap-2 font-mono text-[11px] text-ink"><Dot tone={state.tone} />{state.label}</span>
+      </td>
+      <td className="whitespace-nowrap py-2.5 pl-3 pr-4 text-right">
+        <button
+          type="button"
+          onClick={remove}
+          disabled={busy}
+          className={`font-mono text-[10.5px] uppercase tracking-[0.12em] transition-colors duration-100 ${confirm ? 'text-accent' : 'text-mute hover:text-ink'}`}
+        >
+          {busy ? 'Deleting' : confirm ? 'Confirm' : 'Delete'}
+        </button>
+      </td>
+    </tr>
+  );
+}
+
+function JobLedger({ jobs, activeId, onOpen, onDelete }) {
+  return (
+    <section className="flex-1 bg-paper" aria-labelledby="jobs-heading">
+      <div className="flex items-center justify-between gap-4 border-b border-line px-4 py-2.5">
+        <h2 id="jobs-heading" className="shrink-0 whitespace-nowrap font-mono text-[11px] uppercase tracking-[0.14em] text-mute">
+          Jobs <span className="tabular-nums text-ink">{jobs.length}</span>
+        </h2>
+        <p className="truncate font-mono text-[11px] text-mute">Listed from this browser · files in upload_videos/</p>
+      </div>
+      {jobs.length === 0 ? (
+        <p className="max-w-[62ch] px-4 py-5 text-[13px] leading-relaxed text-mute">
+          Nothing fetched yet. Every video you fetch is listed here. Reopening one reuses its index and the
+          agent's conversation memory, both of which persist on the server.
+        </p>
+      ) : (
+        <div className="relative overflow-x-auto">
+          <table className="w-full min-w-[540px] border-collapse text-left">
+            <thead>
+              <tr className="border-b border-line font-mono text-[10.5px] uppercase tracking-[0.12em] text-mute">
+                <th scope="col" className="py-2 pl-4 pr-3 font-normal">Job</th>
+                <th scope="col" className="px-3 py-2 font-normal">Source</th>
+                <th scope="col" className="px-3 py-2 text-right font-normal">Length</th>
+                <th scope="col" className="hidden px-3 py-2 font-normal md:table-cell">Added</th>
+                <th scope="col" className="px-3 py-2 font-normal">State</th>
+                <th scope="col" className="py-2 pl-3 pr-4"><span className="sr-only">Actions</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              {jobs.map((job) => (
+                <JobRow key={job.id} job={job} active={job.id === activeId} onOpen={onOpen} onDelete={onDelete} />
+              ))}
+            </tbody>
+          </table>
         </div>
-        <div class="video-container" id="videoContainer">
-          <video id="videoPlayer" controls></video>
-          <div class="video-info-bar">
-            <span class="job-id" id="jobIdDisplay"></span>
-            <span class="tag tag-processing" id="videoStatusTag">Processing</span>
-            <button class="btn-transcribe" id="transcribeBtn" onclick="startTranscription()" disabled>
-              Transcribe &amp; Index
+      )}
+    </section>
+  );
+}
+
+// ─── Right rail: chat ───────────────────────────────────────────────────────
+
+const ROLE_LABEL = { user: 'You', assistant: 'ClipChat', error: 'Error' };
+
+const MessageRow = memo(function MessageRow({ message: m }) {
+  return (
+    <li className={`group grid grid-cols-[60px_minmax(0,1fr)] gap-x-3 px-4 py-4 ${m.role === 'user' ? 'bg-paper' : ''}`}>
+      <time dateTime={new Date(m.at).toISOString()} className="font-mono text-[11px] leading-5 tabular-nums text-mute">{clock(m.at)}</time>
+      <div className="min-w-0">
+        <div className="mb-1 flex h-5 items-center gap-2 font-mono text-[10.5px] uppercase tracking-[0.12em]">
+          {m.role === 'assistant' && <span className="h-1.5 w-1.5 bg-accent" />}
+          {m.role === 'error' && <span className="h-1.5 w-1.5 border border-accent" />}
+          <span className={m.role === 'error' ? 'text-accent' : m.role === 'user' ? 'text-mute' : 'text-ink'}>{ROLE_LABEL[m.role]}</span>
+          {m.latency != null && <span className="normal-case tracking-normal tabular-nums text-mute">{duration(m.latency)}</span>}
+          {m.role === 'assistant' && (
+            <CopyText value={m.text} label="Copy" className="ml-auto text-[10.5px] uppercase tracking-[0.12em] text-mute hover:text-ink sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100" />
+          )}
+        </div>
+        {m.role === 'assistant'
+          ? <Markdown text={m.text} />
+          : <p className={`whitespace-pre-wrap break-words text-[14px] leading-relaxed ${m.role === 'user' ? 'font-medium text-ink' : 'text-ink'}`}>{m.text}</p>}
+      </div>
+    </li>
+  );
+});
+
+function PendingRow({ sentAt }) {
+  return (
+    <li className="grid grid-cols-[60px_minmax(0,1fr)] gap-x-3 px-4 py-4">
+      <span className="font-mono text-[11px] leading-5 tabular-nums text-mute">{clock(sentAt)}</span>
+      <div>
+        <div className="mb-1 flex h-5 items-center gap-2 font-mono text-[10.5px] uppercase tracking-[0.12em]">
+          <span className="h-1.5 w-1.5 bg-accent animate-blink motion-reduce:animate-none" />
+          <span className="text-ink">ClipChat</span>
+          <Elapsed since={sentAt} className="normal-case tracking-normal tabular-nums text-mute" />
+        </div>
+        <p className="text-[14px] leading-relaxed text-mute">
+          Waiting for the agent
+          <span className="ml-1 inline-block h-[1em] w-[0.5ch] translate-y-[2px] bg-ink animate-caret motion-reduce:animate-none" />
+        </p>
+      </div>
+    </li>
+  );
+}
+
+function ChatIntro({ segmentCount, disabled, onPick }) {
+  return (
+    <div className="px-4 py-8">
+      <Label>Index ready{segmentCount ? ` · ${segmentCount} segments` : ''}</Label>
+      <h3 className="mt-3 font-display text-2xl font-extrabold tracking-tight">Ask about the video.</h3>
+      <p className="mt-2 max-w-[46ch] text-[13.5px] leading-relaxed text-mute">
+        Questions about the content search the transcript and OCR the frames behind the closest matches.
+        Small talk and follow-ups about earlier answers skip retrieval.
+      </p>
+      <ul className="mt-6 border-t border-line">
+        {PRESETS.map((q, i) => (
+          <li key={q} className="border-b border-line">
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() => onPick(q)}
+              className="group flex w-full items-baseline gap-3 py-2.5 text-left text-[13.5px] text-ink transition-colors duration-100 hover:text-accent disabled:cursor-not-allowed disabled:text-mute"
+            >
+              <span className="font-mono text-[11px] tabular-nums text-mute">{pad(i + 1)}</span>
+              <span className="flex-1">{q}</span>
+              <span className="font-mono text-[11px] text-mute opacity-0 transition-opacity duration-100 group-hover:opacity-100">↵</span>
             </button>
-          </div>
-        </div>
-      </div>
+          </li>
+        ))}
+      </ul>
     </div>
+  );
+}
 
-    <!-- RIGHT PANEL — CHAT -->
-    <div class="chat-panel">
-      <div class="chat-header">
-        <span class="chat-title">Ask the Video</span>
-        <div class="status-pill">
-          <div class="status-dot" id="wsStatusDot"></div>
-          <span id="wsStatusText">Disconnected</span>
-        </div>
-      </div>
-
-      <div class="chat-locked-overlay" id="chatLock">
-        <div class="lock-icon">🔒</div>
-        <p>Transcribe and index the video first to unlock the chat</p>
-      </div>
-
-      <div class="messages" id="messages">
-        <div class="chat-empty" id="chatEmpty">
-          <div class="chat-empty-title">Ask anything</div>
-          <p>Once indexed, you can ask questions about anything in the video</p>
-          <div class="suggestions">
-            <button class="suggestion-btn" onclick="sendSuggestion(this)">What is the main topic discussed?</button>
-            <button class="suggestion-btn" onclick="sendSuggestion(this)">Summarize the key points</button>
-            <button class="suggestion-btn" onclick="sendSuggestion(this)">What happens at the beginning?</button>
-          </div>
-        </div>
-      </div>
-
-      <div class="chat-input-area">
-        <div class="chat-input-row">
-          <textarea
-            class="chat-textarea"
-            id="chatInput"
-            placeholder="Ask something about the video..."
-            rows="1"
-            disabled
-            onkeydown="handleChatKey(event)"
-            oninput="autoResize(this)"
-          ></textarea>
-          <button class="btn-send" id="sendBtn" onclick="sendMessage()" disabled>
-            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M3 10l14-7-5 14-3-6-6-1z"/>
-            </svg>
-          </button>
-        </div>
-        <div class="input-hint">↵ Enter to send &nbsp;·&nbsp; Shift+↵ new line</div>
-      </div>
+function RailNotice({ kicker, title, children }) {
+  return (
+    <div className="px-4 py-8">
+      <Label>{kicker}</Label>
+      <h3 className="mt-3 font-display text-2xl font-extrabold tracking-tight">{title}</h3>
+      <p className="mt-2 max-w-[46ch] text-[13.5px] leading-relaxed text-mute">{children}</p>
     </div>
-  </div>
-</div>
+  );
+}
 
-<div class="toast" id="toast"></div>
+function Composer({ inputRef, enabled, canSend, waiting, placeholder, onSend }) {
+  const [value, setValue] = useState('');
+  const resize = (el) => { el.style.height = 'auto'; el.style.height = `${Math.min(el.scrollHeight, 160)}px`; };
+  const submit = () => {
+    if (!onSend(value)) return;
+    setValue('');
+    requestAnimationFrame(() => inputRef.current && resize(inputRef.current));
+  };
+  return (
+    <form
+      onSubmit={(e) => { e.preventDefault(); submit(); }}
+      className="shrink-0 border-t border-line bg-surface transition-colors duration-100 focus-within:border-ink"
+    >
+      <label htmlFor="composer" className="sr-only">Question about the video</label>
+      <textarea
+        id="composer"
+        ref={inputRef}
+        rows={2}
+        value={value}
+        disabled={!enabled}
+        placeholder={placeholder}
+        onChange={(e) => { setValue(e.target.value); resize(e.target); }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); submit(); }
+          if (e.key === 'Escape') e.currentTarget.blur();
+        }}
+        className="block max-h-40 w-full resize-none bg-transparent px-4 pb-1 pt-3.5 text-[14px] leading-relaxed text-ink outline-none placeholder:text-mute disabled:cursor-not-allowed"
+      />
+      <div className="flex items-center justify-between gap-3 px-4 pb-3 pt-1">
+        <div className="flex items-center gap-3 font-mono text-[11px] text-mute">
+          <span className="flex items-center gap-1.5"><Kbd>↵</Kbd>send</span>
+          <span className="flex items-center gap-1.5"><Kbd>⇧↵</Kbd>newline</span>
+          <span className="hidden items-center gap-1.5 sm:flex"><Kbd>/</Kbd>focus</span>
+        </div>
+        <button
+          type="submit"
+          disabled={!canSend || waiting || !value.trim()}
+          className="bg-ink px-3.5 py-1.5 text-[12.5px] font-medium text-paper transition-colors duration-100 hover:bg-accent hover:text-white disabled:cursor-not-allowed disabled:bg-line disabled:text-mute"
+        >
+          {waiting ? 'Waiting' : 'Send'}
+        </button>
+      </div>
+    </form>
+  );
+}
 
-<script>
-  // ── State ──
-  let currentJobId = null;
-  let websocket = null;
-  let isConnected = false;
-  let isWaitingForResponse = false;
+function ChatPanel({ job, indexed, socket, items, pending, segmentCount, composerRef, onSend, onReconnect }) {
+  const scrollRef = useRef(null);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [items.length, pending]);
 
-  // ── DOM Refs ──
-  const urlInput = document.getElementById('urlInput');
-  const submitBtn = document.getElementById('submitBtn');
-  const progressWrap = document.getElementById('progressWrap');
-  const progressBar = document.getElementById('progressBar');
-  const videoPlaceholder = document.getElementById('videoPlaceholder');
-  const videoContainer = document.getElementById('videoContainer');
-  const videoPlayer = document.getElementById('videoPlayer');
-  const jobIdDisplay = document.getElementById('jobIdDisplay');
-  const videoStatusTag = document.getElementById('videoStatusTag');
-  const transcribeBtn = document.getElementById('transcribeBtn');
-  const chatLock = document.getElementById('chatLock');
-  const messages = document.getElementById('messages');
-  const chatEmpty = document.getElementById('chatEmpty');
-  const chatInput = document.getElementById('chatInput');
-  const sendBtn = document.getElementById('sendBtn');
-  const statusDot = document.getElementById('statusDot');
-  const statusText = document.getElementById('statusText');
-  const wsStatusDot = document.getElementById('wsStatusDot');
-  const wsStatusText = document.getElementById('wsStatusText');
+  const placeholder = !indexed
+    ? 'Chat opens after step 03'
+    : socket === 'open' ? 'Ask about the video…'
+    : socket === 'connecting' ? 'Connecting…'
+    : 'Socket closed. Reconnect to continue';
 
-  // ── Utilities ──
-  function showToast(msg, type = '') {
-    const toast = document.getElementById('toast');
-    toast.textContent = msg;
-    toast.className = `toast show ${type}`;
-    setTimeout(() => toast.className = 'toast', 3200);
+  let body;
+  if (items.length || pending) {
+    body = (
+      <ol role="log" className="divide-y divide-line border-b border-line">
+        {items.map((m) => <MessageRow key={m.id} message={m} />)}
+        {pending && <PendingRow sentAt={pending.sentAt} />}
+      </ol>
+    );
+  } else if (indexed) {
+    body = <ChatIntro segmentCount={segmentCount} disabled={socket !== 'open'} onPick={onSend} />;
+  } else if (job) {
+    body = <RailNotice kicker="Chat offline" title="Waiting on the index.">The socket opens once step 03 has written the transcript into ChromaDB.</RailNotice>;
+  } else {
+    body = <RailNotice kicker="Chat offline" title="No video yet.">Fetch a video on the left. The chat connects once its transcript is indexed.</RailNotice>;
   }
 
-  function setStatus(dot, text, state) {
-    dot.className = `status-dot ${state}`;
-    text.textContent = state === 'ready' ? 'Ready' : state === 'processing' ? 'Processing' : state === 'error' ? 'Error' : text.textContent;
-    text.textContent = { idle: 'Idle', ready: 'Ready', processing: 'Processing...', error: 'Error' }[state] || text.textContent;
+  return (
+    <>
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">{body}</div>
+      {indexed && socket === 'closed' && (
+        <div className="flex shrink-0 items-start gap-3 border-t border-line bg-paper px-4 py-3 text-[12.5px] leading-relaxed text-mute">
+          <Dot tone="err" className="mt-[7px]" />
+          <p className="flex-1">
+            Socket closed. If it closes right after connecting, Redis is probably down:{' '}
+            <code className="whitespace-nowrap font-mono text-[12px] text-ink">docker start redis-cache</code>
+          </p>
+          <button type="button" onClick={onReconnect} className="font-mono text-[11px] uppercase tracking-[0.12em] text-ink transition-colors duration-100 hover:text-accent">Reconnect</button>
+        </div>
+      )}
+      <Composer
+        inputRef={composerRef}
+        enabled={indexed}
+        canSend={socket === 'open'}
+        waiting={!!pending}
+        placeholder={placeholder}
+        onSend={onSend}
+      />
+    </>
+  );
+}
+
+// ─── Right rail: transcript ─────────────────────────────────────────────────
+
+const SegmentRow = memo(function SegmentRow({ seg, active, rowRef, query, onSeek }) {
+  return (
+    <button
+      ref={rowRef}
+      type="button"
+      onClick={() => onSeek(seg.start)}
+      className={`grid w-full grid-cols-[52px_minmax(0,1fr)] gap-3 border-b border-line px-4 py-2 text-left transition-colors duration-100 hover:bg-paper ${active ? 'bg-paper shadow-[inset_2px_0_0_#F43F5E]' : ''}`}
+    >
+      <span className={`font-mono text-[11px] leading-6 tabular-nums ${active ? 'text-accent' : 'text-mute'}`}>{timecode(seg.start)}</span>
+      <span className="text-[13.5px] leading-6 text-ink">{highlight(seg.text, query)}</span>
+    </button>
+  );
+});
+
+function TranscriptPanel({ transcript, videoRef, videoKey, onSeek }) {
+  const [query, setQuery] = useState('');
+  const [follow, setFollow] = useState(true);
+  const listRef = useRef(null);
+  const activeRef = useRef(null);
+  const time = useVideoTime(videoRef, videoKey);
+
+  const segments = transcript.segments;
+  const q = query.trim().toLowerCase();
+  const activeIdx = useMemo(() => findSegment(segments, time), [segments, time]);
+  const rows = useMemo(
+    () => segments.map((s, i) => ({ ...s, i })).filter((s) => !q || s.text.toLowerCase().includes(q)),
+    [segments, q],
+  );
+  const stats = useMemo(() => ({
+    words: segments.reduce((n, s) => n + s.text.split(/\s+/).filter(Boolean).length, 0),
+    end: segments.length ? segments[segments.length - 1].end : 0,
+  }), [segments]);
+
+  // Keep the playing segment in view without scrolling the page itself
+  useEffect(() => {
+    if (!follow || q) return;
+    const box = listRef.current;
+    const row = activeRef.current;
+    if (!box || !row) return;
+    const top = row.offsetTop;
+    if (top < box.scrollTop || top + row.offsetHeight > box.scrollTop + box.clientHeight) {
+      box.scrollTo({ top: Math.max(0, top - box.clientHeight / 3) });
+    }
+  }, [activeIdx, follow, q]);
+
+  if (transcript.status === 'loading') {
+    return <RailNotice kicker="transcript.jsonl" title="Loading…">Reading Whisper's segments from the job folder.</RailNotice>;
+  }
+  if (transcript.status === 'error') {
+    return <RailNotice kicker="transcript.jsonl" title="Couldn't read the transcript.">The file is missing or unreadable. Chat may still work, since the index lives in ChromaDB.</RailNotice>;
+  }
+  if (transcript.status !== 'ready') {
+    return (
+      <RailNotice kicker="transcript.jsonl" title="Nothing transcribed yet.">
+        Whisper writes one line per segment with start and end times. They show up here after step 03, and clicking a line seeks the player.
+      </RailNotice>
+    );
   }
 
-  function autoResize(el) {
-    el.style.height = 'auto';
-    el.style.height = Math.min(el.scrollHeight, 120) + 'px';
-  }
+  return (
+    <>
+      <div className="flex shrink-0 items-center gap-3 border-b border-line px-4 py-2">
+        <label htmlFor="segment-filter" className="sr-only">Filter segments</label>
+        <input
+          id="segment-filter"
+          type="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Filter segments"
+          className="min-w-0 flex-1 bg-transparent py-1 text-[13px] text-ink outline-none placeholder:text-mute"
+        />
+        <span className="font-mono text-[11px] tabular-nums text-mute">{q ? `${rows.length}/${segments.length}` : segments.length}</span>
+        <button
+          type="button"
+          aria-pressed={follow}
+          onClick={() => setFollow((f) => !f)}
+          className={`border px-2 py-1 font-mono text-[10.5px] uppercase tracking-[0.12em] transition-colors duration-100 ${follow ? 'border-ink bg-ink text-paper' : 'border-line text-mute hover:text-ink'}`}
+        >
+          Follow
+        </button>
+      </div>
+      <div ref={listRef} className="relative min-h-0 flex-1 overflow-y-auto">
+        {rows.length ? rows.map((s) => (
+          <SegmentRow key={s.i} seg={s} active={s.i === activeIdx} rowRef={s.i === activeIdx ? activeRef : null} query={q} onSeek={onSeek} />
+        )) : (
+          <p className="px-4 py-6 text-[13px] text-mute">No segment contains “{query.trim()}”.</p>
+        )}
+      </div>
+      <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-t border-line px-4 py-2 font-mono text-[11px] tabular-nums text-mute">
+        <span>{segments.length} segments</span>
+        <span>{stats.words.toLocaleString()} words</span>
+        <span>{timecode(stats.end)}</span>
+        <span className="ml-auto">click a line to seek</span>
+      </div>
+    </>
+  );
+}
 
-  function scrollToBottom() {
-    messages.scrollTo({ top: messages.scrollHeight, behavior: 'smooth' });
-  }
+function RailTabs({ tab, onTab, chatCount, segmentCount }) {
+  const tabs = [
+    { id: 'chat', label: 'Chat', count: chatCount },
+    { id: 'transcript', label: 'Transcript', count: segmentCount ?? '—' },
+  ];
+  return (
+    <div role="tablist" className="flex h-11 shrink-0 items-stretch border-b border-line">
+      {tabs.map((t) => (
+        <button
+          key={t.id}
+          type="button"
+          role="tab"
+          aria-selected={tab === t.id}
+          onClick={() => onTab(t.id)}
+          className={`flex items-center gap-2 border-r border-line px-4 text-[13px] font-medium transition-colors duration-100 ${tab === t.id ? 'text-ink shadow-[inset_0_-2px_0_#E6E8EB]' : 'text-mute hover:text-ink'}`}
+        >
+          {t.label}
+          <span className="font-mono text-[11px] font-normal tabular-nums text-mute">{t.count}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
 
-  // ── Step 1: Submit URL ──
-  async function submitURL() {
-    const url = urlInput.value.trim();
-    if (!url) { showToast('Please enter a YouTube URL', 'error'); return; }
+// ─── App ────────────────────────────────────────────────────────────────────
 
-    submitBtn.classList.add('loading');
-    submitBtn.disabled = true;
-    progressWrap.classList.add('visible');
-    setStatus(statusDot, statusText, 'processing');
-    statusText.textContent = 'Downloading...';
+function App() {
+  const [jobs, setJobs] = useState(() => store.get(STORE_JOBS, []));
+  const [activeId, setActiveId] = useState(null);
+  const [source, setSource] = useState('');
+  const [sourceError, setSourceError] = useState(null);
+  const [pendingUrl, setPendingUrl] = useState(null);   // URL being downloaded before it has a job id
+  const [pipeline, setPipeline] = useState(freshPipeline);
+  const [socket, setSocket] = useState('idle');           // idle | connecting | open | closed
+  const [chat, setChat] = useState({ jobId: null, items: [] });
+  const [pending, setPending] = useState(null);
+  const [transcript, setTranscript] = useState({ status: 'none', segments: [] });
+  const [videoMeta, setVideoMeta] = useState(null);
+  const [videoError, setVideoError] = useState(false);
+  const [tab, setTab] = useState('chat');
 
+  const runRef = useRef(0);   // bumped on every job switch; async work from an older run is dropped
+  const wsRef = useRef(null);
+  const pendingRef = useRef(null);
+  const retryRef = useRef({ count: 0, timer: null });
+  const indexingRef = useRef(new Map());   // job id -> { t0, promise } for a POST /upload in flight
+  const autoRef = useRef(new Set());       // job ids whose first download → audio → index run is still going
+  const restoreRef = useRef(store.get(STORE_ACTIVE, null));
+  const videoRef = useRef(null);
+  const sourceRef = useRef(null);
+  const composerRef = useRef(null);
+
+  const activeJob = jobs.find((j) => j.id === activeId) || null;
+  const indexed = pipeline.index.state === 'done';
+
+  useEffect(() => store.set(STORE_JOBS, jobs), [jobs]);
+  useEffect(() => { if (chat.jobId) store.set(STORE_MSGS + chat.jobId, chat.items.slice(-MAX_MSGS)); }, [chat]);
+  useEffect(() => { if (activeId) store.set(STORE_ACTIVE, activeId); else store.remove(STORE_ACTIVE); }, [activeId]);
+  useEffect(() => { document.title = activeJob?.title ? `${activeJob.title} · ClipChat` : 'ClipChat'; }, [activeJob?.title]);
+
+  const updateJob = useCallback((id, patch) => {
+    setJobs((js) => js.map((j) => (j.id === id ? { ...j, ...(typeof patch === 'function' ? patch(j) : patch) } : j)));
+  }, []);
+
+  const patchStage = useCallback((run, key, patch) => {
+    if (run !== runRef.current) return;
+    setPipeline((p) => ({ ...p, [key]: { ...p[key], ...patch } }));
+  }, []);
+
+  const pushMessage = useCallback((jobId, msg) => {
+    setChat((c) => (c.jobId === jobId ? { ...c, items: [...c.items, { id: uid(), at: Date.now(), ...msg }] } : c));
+  }, []);
+
+  // ── Socket ──
+
+  const closeSocket = useCallback(() => {
+    clearTimeout(retryRef.current.timer);
+    retryRef.current = { count: 0, timer: null };
+    const ws = wsRef.current;
+    wsRef.current = null;
+    if (ws) ws.close();
+    setSocket('idle');
+    pendingRef.current = null;
+    setPending(null);
+  }, []);
+
+  const connect = useCallback((jobId, run) => {
+    if (run !== runRef.current) return;
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    const ws = new WebSocket(`${proto}://${location.host}/upload/${jobId}/query`);
+    wsRef.current = ws;
+    setSocket('connecting');
+
+    ws.onopen = () => { if (wsRef.current === ws) setSocket('open'); };
+
+    ws.onmessage = (event) => {
+      if (wsRef.current !== ws) return;
+      retryRef.current.count = 0;
+      const sentAt = pendingRef.current?.sentAt;
+      pendingRef.current = null;
+      setPending(null);
+      pushMessage(jobId, {
+        role: event.data === SERVER_ERROR_TEXT ? 'error' : 'assistant',
+        text: event.data,
+        latency: sentAt ? Date.now() - sentAt : null,
+      });
+    };
+
+    ws.onclose = () => {
+      if (wsRef.current !== ws) return;   // closed on purpose
+      wsRef.current = null;
+      setSocket('closed');
+      if (pendingRef.current) {
+        pendingRef.current = null;
+        setPending(null);
+        pushMessage(jobId, { role: 'error', text: 'The socket closed before an answer arrived.' });
+      }
+      const retry = retryRef.current;
+      if (retry.count < MAX_RETRIES) {
+        const delay = 1000 * 2 ** retry.count;
+        retry.count += 1;
+        retry.timer = setTimeout(() => connect(jobId, run), delay);
+      }
+    };
+  }, [pushMessage]);
+
+  const reconnect = () => {
+    if (!activeId) return;
+    closeSocket();
+    connect(activeId, runRef.current);
+  };
+
+  const send = (text) => {
+    const body = text.trim();
+    const ws = wsRef.current;
+    if (!body || !ws || ws.readyState !== WebSocket.OPEN || pendingRef.current) return false;
+    pushMessage(activeId, { role: 'user', text: body });
+    const sentAt = Date.now();
+    pendingRef.current = { sentAt };
+    setPending({ sentAt });
+    ws.send(body);
+    return true;
+  };
+
+  // ── Pipeline ──
+
+  const resetWorkspace = () => {
+    runRef.current += 1;
+    closeSocket();
+    setPipeline(freshPipeline());
+    setTranscript({ status: 'none', segments: [] });
+    setVideoMeta(null);
+    setVideoError(false);
+    setSourceError(null);
+    setPendingUrl(null);
+    return runRef.current;
+  };
+
+  const loadTranscript = async (jobId, run) => {
+    setTranscript({ status: 'loading', segments: [] });
+    const segments = await fetchTranscript(jobId);
+    if (run !== runRef.current) return;
+    setTranscript(segments ? { status: 'ready', segments } : { status: 'error', segments: [] });
+  };
+
+  // Polls /status until ffmpeg has written audio.wav. A `fresh` job keeps polling after the
+  // user switches away, so it still gets indexed; a reopened one stops when it leaves view.
+  const waitForAudio = async (jobId, run, fresh) => {
+    const t0 = Date.now();
+    patchStage(run, 'audio', { state: 'run', t0, ms: null, error: null });
+    while (Date.now() - t0 < POLL_LIMIT_MS) {
+      if (!fresh && run !== runRef.current) return false;
+      let status = null;
+      try { status = await fetchStatus(jobId); } catch { /* transient, keep polling */ }
+      if (status === 'ready') {
+        const ms = Date.now() - t0;
+        patchStage(run, 'audio', { state: 'done', ms });
+        updateJob(jobId, (j) => ({ stage: 'audio', timings: fresh ? { ...j.timings, audio: ms } : j.timings }));
+        return true;
+      }
+      if (status === 'failed') {
+        patchStage(run, 'audio', { state: 'err', ms: Date.now() - t0, error: 'The job folder is gone from the server.' });
+        updateJob(jobId, { stage: 'missing' });
+        return false;
+      }
+      await sleep(POLL_MS);
+    }
+    patchStage(run, 'audio', { state: 'err', ms: Date.now() - t0, error: 'No audio.wav after 3 minutes. ffmpeg probably failed; check the app logs.' });
+    return false;
+  };
+
+  // One POST /upload per job: a second caller joins the request in flight, because
+  // indexing twice would add every segment to the Chroma collection twice
+  const runIndex = async (jobId, run) => {
+    let entry = indexingRef.current.get(jobId);
+    if (!entry) {
+      const t0 = Date.now();
+      const promise = (async () => {
+        const res = await fetch(`/upload/${jobId}`, { method: 'POST' });
+        if (!res.ok) throw new Error(await errorDetail(res));
+        updateJob(jobId, (j) => ({ stage: 'indexed', timings: { ...j.timings, index: Date.now() - t0 } }));
+      })().finally(() => indexingRef.current.delete(jobId));
+      entry = { t0, promise };
+      indexingRef.current.set(jobId, entry);
+    }
+    patchStage(run, 'index', { state: 'run', t0: entry.t0, ms: null, error: null });
+    try {
+      await entry.promise;
+    } catch (e) {
+      patchStage(run, 'index', { state: 'err', ms: Date.now() - entry.t0, error: networkMessage(e) });
+      return;
+    }
+    patchStage(run, 'index', { state: 'done', ms: Date.now() - entry.t0 });
+    if (run !== runRef.current) return;
+    loadTranscript(jobId, run);
+    connect(jobId, run);
+  };
+
+  const submitSource = async (raw) => {
+    const url = raw.trim();
+    if (!isHttpUrl(url)) {
+      setSourceError('Not a full URL. Paste the whole link, e.g. https://youtu.be/…');
+      return;
+    }
+    const run = resetWorkspace();
+    setActiveId(null);
+    setChat({ jobId: null, items: [] });
+    setTab('chat');
+    setPendingUrl(url);
+    const t0 = Date.now();
+    patchStage(run, 'download', { state: 'run', t0, ms: null, error: null });
+    const meta = fetchVideoMeta(url);
+
+    let jobId;
     try {
       const res = await fetch(`/upload-url?url=${encodeURIComponent(url)}`, { method: 'POST' });
-      if (!res.ok) throw new Error('Upload failed');
-      const data = await res.json();
-      currentJobId = data.job_id;
-
-      jobIdDisplay.textContent = `JOB · ${currentJobId.slice(0, 8).toUpperCase()}`;
-      videoPlaceholder.style.display = 'none';
-      videoContainer.classList.add('active');
-      videoPlayer.src = `/videos/${currentJobId}/video.mp4`;
-
-      showToast('Video downloaded. Processing audio...', '');
-      pollStatus(currentJobId);
+      if (!res.ok) throw new Error(await errorDetail(res));
+      jobId = (await res.json()).job_id;
     } catch (e) {
-      showToast('Failed to load video', 'error');
-      setStatus(statusDot, statusText, 'error');
-      progressWrap.classList.remove('visible');
-      submitBtn.classList.remove('loading');
-      submitBtn.disabled = false;
+      patchStage(run, 'download', { state: 'err', ms: Date.now() - t0, error: networkMessage(e) });
+      return;
     }
-  }
 
-  // ── Step 2: Poll Status ──
-  function pollStatus(jobId) {
-    let attempts = 0;
-    const interval = setInterval(async () => {
-      try {
-        attempts++;
-        const res = await fetch(`/status/${jobId}`);
-        const data = await res.json();
-
-        if (data.status === 'ready') {
-          clearInterval(interval);
-          progressBar.classList.remove('indeterminate');
-          progressBar.style.width = '100%';
-          videoStatusTag.textContent = 'Ready';
-          videoStatusTag.className = 'tag tag-ready';
-          transcribeBtn.disabled = false;
-          setStatus(statusDot, statusText, 'ready');
-          statusText.textContent = 'Audio Ready';
-          showToast('Processing complete! Click "Transcribe & Index" to enable chat.', 'success');
-
-          setTimeout(() => {
-            progressWrap.classList.remove('visible');
-            progressBar.style.width = '0%';
-          }, 1500);
-        } else if (data.status === 'failed' || attempts > 120) {
-          clearInterval(interval);
-          setStatus(statusDot, statusText, 'error');
-          showToast('Processing failed', 'error');
-        }
-      } catch (e) { /* retry */ }
-
-      submitBtn.classList.remove('loading');
-      submitBtn.disabled = false;
-    }, 3000);
-  }
-
-  // ── Step 3: Transcribe ──
-  async function startTranscription() {
-    if (!currentJobId) return;
-    transcribeBtn.disabled = true;
-    transcribeBtn.textContent = 'Indexing...';
-    setStatus(statusDot, statusText, 'processing');
-    statusText.textContent = 'Transcribing...';
-
+    // The job exists on the server now: it goes in the ledger and gets indexed even if the user moved on
+    const ms = Date.now() - t0;
+    setJobs((js) => [{
+      id: jobId, url, title: null, channel: null, createdAt: t0, durationSec: null, stage: 'downloaded', timings: { download: ms },
+    }, ...js]);
+    meta.then((m) => m && updateJob(jobId, m));
+    if (run === runRef.current) {
+      setSource('');
+      setPendingUrl(null);
+      setActiveId(jobId);
+      setChat({ jobId, items: [] });
+      patchStage(run, 'download', { state: 'done', ms });
+    }
+    autoRef.current.add(jobId);
     try {
-      const res = await fetch(`/upload/${currentJobId}`, { method: 'POST' });
-      if (!res.ok) throw new Error('Transcription failed');
-      showToast('Transcription complete! Chat is now unlocked.', 'success');
-      transcribeBtn.textContent = 'Indexed ✓';
-      setStatus(statusDot, statusText, 'ready');
-      statusText.textContent = 'Indexed';
-      unlockChat();
+      if (await waitForAudio(jobId, run, true)) await runIndex(jobId, run);
+    } finally {
+      autoRef.current.delete(jobId);
+    }
+  };
+
+  const openJob = async (job) => {
+    if (job.id === activeId) return;
+    const run = resetWorkspace();
+    const t = job.timings || {};
+    setActiveId(job.id);
+    setChat({ jobId: job.id, items: store.get(STORE_MSGS + job.id, []) });
+    setPipeline({ download: doneStage(t.download), audio: idleStage(), index: idleStage() });
+
+    let status;
+    try { status = await fetchStatus(job.id); }
+    catch { patchStage(run, 'audio', { state: 'err', error: 'Server unreachable. Is uvicorn running?' }); return; }
+    if (run !== runRef.current) return;
+
+    if (status === 'failed') {
+      patchStage(run, 'download', { state: 'err', error: 'Job folder not found on the server.' });
+      updateJob(job.id, { stage: 'missing' });
+      return;
+    }
+    if (status === 'processing') {
+      if (!(await waitForAudio(job.id, run, false))) return;
+    } else {
+      patchStage(run, 'audio', doneStage(t.audio));
+    }
+
+    // Still in its first run, started from the source bar: let that pipeline finish the indexing
+    if (autoRef.current.has(job.id) || indexingRef.current.has(job.id)) {
+      await runIndex(job.id, run);
+      return;
+    }
+
+    setTranscript({ status: 'loading', segments: [] });
+    const segments = await fetchTranscript(job.id);
+    if (run !== runRef.current) return;
+    if (segments) {
+      patchStage(run, 'index', doneStage(t.index));
+      setTranscript({ status: 'ready', segments });
+      updateJob(job.id, { stage: 'indexed' });
+      connect(job.id, run);
+    } else {
+      setTranscript({ status: 'none', segments: [] });
+      updateJob(job.id, { stage: 'audio' });
+    }
+  };
+
+  const deleteJob = async (id) => {
+    // Unload the player and socket first so the server isn't holding the files open
+    if (id === activeId) {
+      resetWorkspace();
+      setActiveId(null);
+      setChat({ jobId: null, items: [] });
+    }
+    try {
+      const res = await fetch(`/uploads/${id}/delete`, { method: 'DELETE' });
+      if (!res.ok && res.status !== 404) throw new Error(await errorDetail(res));
     } catch (e) {
-      showToast('Transcription failed', 'error');
-      transcribeBtn.disabled = false;
-      transcribeBtn.textContent = 'Transcribe & Index';
-      setStatus(statusDot, statusText, 'error');
+      return networkMessage(e);
     }
-  }
+    store.remove(STORE_MSGS + id);
+    setJobs((js) => js.filter((j) => j.id !== id));
+    return null;
+  };
 
-  // ── Step 4: Unlock Chat & WebSocket ──
-  function unlockChat() {
-    chatLock.classList.add('hidden');
-    chatInput.disabled = false;
-    sendBtn.disabled = false;
-    connectWebSocket();
-  }
+  const onVideoMeta = (m) => {
+    setVideoMeta(m);
+    if (activeId && Number.isFinite(m.duration)) updateJob(activeId, { durationSec: Math.round(m.duration) });
+  };
 
-  function connectWebSocket() {
-    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    websocket = new WebSocket(`${proto}://${location.host}/upload/${currentJobId}/query`);
+  const seek = useCallback((t) => {
+    const v = videoRef.current;
+    if (!v) return;
+    v.currentTime = t;
+    v.play().catch(() => {});
+  }, []);
 
-    websocket.onopen = () => {
-      isConnected = true;
-      wsStatusDot.className = 'status-dot ready';
-      wsStatusText.textContent = 'Connected';
-      showToast('Chat connected', 'success');
+  const focusSource = () => {
+    sourceRef.current?.focus();
+    sourceRef.current?.select();
+  };
+
+  // Reopen the job that was active before the last reload
+  useEffect(() => {
+    const job = jobs.find((j) => j.id === restoreRef.current);
+    if (job) openJob(job);
+  }, []);
+
+  useEffect(() => {
+    const isTyping = (el) => el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
+    const onKey = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        focusSource();
+      } else if (e.key === '/' && !isTyping(e.target)) {
+        e.preventDefault();
+        setTab('chat');
+        requestAnimationFrame(() => composerRef.current?.focus());
+      }
     };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
-    websocket.onmessage = (e) => {
-      removeTypingIndicator();
-      appendMessage('assistant', e.data);
-      isWaitingForResponse = false;
-      sendBtn.disabled = false;
+  const stats = useMemo(() => {
+    const latencies = chat.items.filter((m) => m.role === 'assistant' && m.latency != null).map((m) => m.latency);
+    return {
+      asked: chat.items.filter((m) => m.role === 'user').length,
+      avg: latencies.length ? latencies.reduce((a, b) => a + b, 0) / latencies.length : null,
     };
+  }, [chat.items]);
 
-    websocket.onclose = () => {
-      isConnected = false;
-      wsStatusDot.className = 'status-dot error';
-      wsStatusText.textContent = 'Disconnected';
-    };
+  const downloading = pipeline.download.state === 'run' && !activeId;
+  const segmentCount = transcript.status === 'ready' ? transcript.segments.length : null;
 
-    websocket.onerror = () => {
-      showToast('WebSocket error', 'error');
-    };
-  }
+  return (
+    <div className="flex min-h-screen flex-col lg:h-screen lg:overflow-hidden">
+      <Header
+        job={activeJob}
+        pendingUrl={pendingUrl}
+        fetchFailed={pipeline.download.state === 'err'}
+        socket={socket}
+        onReconnect={reconnect}
+        onNewSource={focusSource}
+      />
 
-  // ── Chat ──
-  function appendMessage(role, text) {
-    if (chatEmpty) {
-      const empty = document.getElementById('chatEmpty');
-      if (empty) empty.style.display = 'none';
-    }
+      <main className="grid flex-1 grid-cols-1 lg:min-h-0 lg:grid-cols-[minmax(0,1fr)_440px] lg:grid-rows-[minmax(0,1fr)] 2xl:grid-cols-[minmax(0,1fr)_520px]">
+        <section className="flex min-w-0 flex-col lg:min-h-0 lg:overflow-y-auto">
+          <SourceBar
+            inputRef={sourceRef}
+            value={source}
+            onChange={(v) => { setSource(v); setSourceError(null); }}
+            busy={downloading}
+            error={sourceError}
+            onSubmit={submitSource}
+          />
+          <Stage
+            job={activeJob}
+            pendingUrl={pendingUrl}
+            download={pipeline.download}
+            videoRef={videoRef}
+            meta={videoMeta}
+            videoError={videoError}
+            onMeta={onVideoMeta}
+            onVideoError={() => setVideoError(true)}
+            onRefetch={submitSource}
+          />
+          <Pipeline
+            pipeline={pipeline}
+            job={activeJob}
+            socket={socket}
+            stats={stats}
+            onIndex={() => activeId && runIndex(activeId, runRef.current)}
+          />
+          <JobLedger jobs={jobs} activeId={activeId} onOpen={openJob} onDelete={deleteJob} />
+        </section>
 
-    const msg = document.createElement('div');
-    msg.className = `message ${role}`;
-    msg.innerHTML = `
-      <span class="msg-label">${role === 'user' ? 'You' : 'AI'}</span>
-      <div class="msg-bubble">${escapeHtml(text)}</div>
-    `;
-    messages.appendChild(msg);
-    scrollToBottom();
-  }
+        <aside className="flex h-[85vh] min-w-0 flex-col border-t border-line bg-surface lg:h-auto lg:min-h-0 lg:border-l lg:border-t-0">
+          <RailTabs tab={tab} onTab={setTab} chatCount={stats.asked} segmentCount={segmentCount} />
+          {tab === 'chat' ? (
+            <ChatPanel
+              job={activeJob}
+              indexed={indexed}
+              socket={socket}
+              items={chat.items}
+              pending={pending}
+              segmentCount={segmentCount}
+              composerRef={composerRef}
+              onSend={send}
+              onReconnect={reconnect}
+            />
+          ) : (
+            <TranscriptPanel
+              transcript={transcript}
+              videoRef={videoRef}
+              videoKey={`${activeId}:${pipeline.download.state}`}
+              onSeek={seek}
+            />
+          )}
+        </aside>
+      </main>
+    </div>
+  );
+}
 
-  function showTypingIndicator() {
-    const existing = document.getElementById('typingIndicator');
-    if (existing) return;
-    const wrap = document.createElement('div');
-    wrap.className = 'message assistant';
-    wrap.id = 'typingIndicator';
-    wrap.innerHTML = `
-      <span class="msg-label">AI</span>
-      <div class="typing-indicator">
-        <div class="typing-dot"></div>
-        <div class="typing-dot"></div>
-        <div class="typing-dot"></div>
-      </div>
-    `;
-    messages.appendChild(wrap);
-    scrollToBottom();
-  }
-
-  function removeTypingIndicator() {
-    const el = document.getElementById('typingIndicator');
-    if (el) el.remove();
-  }
-
-  function escapeHtml(str) {
-    return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
-  }
-
-  function sendMessage() {
-    const text = chatInput.value.trim();
-    if (!text || !isConnected || isWaitingForResponse) return;
-    appendMessage('user', text);
-    chatInput.value = '';
-    chatInput.style.height = 'auto';
-    websocket.send(text);
-    isWaitingForResponse = true;
-    sendBtn.disabled = true;
-    showTypingIndicator();
-  }
-
-  function sendSuggestion(btn) {
-    chatInput.value = btn.textContent;
-    sendMessage();
-  }
-
-  function handleChatKey(e) {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      sendMessage();
-    }
-  }
-
-  urlInput.addEventListener('keydown', e => { if (e.key === 'Enter') submitURL(); });
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
 </script>
 </body>
 </html>
